@@ -1,10 +1,6 @@
 import ffmpeg from 'fluent-ffmpeg';
 import { getTempPath, getClipPath, ensureDirectories, getThumbTempDir } from './fs';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
 import path from 'node:path';
-
-const execAsync = promisify(exec);
 
 // Specific paths for FFmpeg tools on Windows
 const FFMPEG_PATH = 'C:/tools/ffmpeg.exe';
@@ -21,47 +17,14 @@ export interface TrimOptions {
   outputPrefix?: string;
 }
 
-/**
- * Finds the timestamp of the loudest moment (Peak) within a video file.
- */
-async function getLoudestTimestamp(inputPath: string): Promise<number> {
-  try {
-    // Prepare path for FFmpeg filter (amovie requires special escaping for colons and backslashes)
-    const filterPath = inputPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-
-    const command = `"${FFPROBE_PATH}" -v error -f lavfi -i "amovie='${filterPath}',ebur128=metadata=1" -show_entries frame=pkt_pts_time:frame_tags=lavfi.r128.M -of csv=p=0`;
-
-    const { stdout } = await execAsync(command);
-    const lines = stdout.trim().split('\n');
-
-    let maxLoudness = -100; // dBFS (approx)
-    let peakTime = 0;
-
-    for (const line of lines) {
-      const [timeStr, loudnessStr] = line.split(',');
-      const time = parseFloat(timeStr);
-      const loudness = parseFloat(loudnessStr);
-
-      if (!isNaN(time) && !isNaN(loudness) && loudness > maxLoudness) {
-        maxLoudness = loudness;
-        peakTime = time;
-      }
-    }
-
-    return peakTime;
-  } catch (error) {
-    console.error('[trimmer] Error detecting loudest timestamp:', error);
-    return 0; // Fallback to start of clip
-  }
-}
 
 /**
  * Extracts a high-quality frame from a video at a specific timestamp.
  */
-async function extractThumbnail(videoPath: string, timestamp: number, outputPath: string): Promise<void> {
+export async function extractThumbnail(videoPath: string, timestamp: number, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     ffmpeg(videoPath)
-      .seekInput(timestamp)
+      .seek(timestamp)
       .frames(1)
       .outputOptions(['-q:v 2']) // High quality JPG
       .output(outputPath)
@@ -77,7 +40,19 @@ async function extractThumbnail(videoPath: string, timestamp: number, outputPath
   });
 }
 
-export async function createClip(options: TrimOptions): Promise<{ videoPath: string; clipId: string }> {
+async function getDuration(inputPath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(inputPath, (err, metadata) => {
+      if (err) reject(err);
+      else resolve(metadata.format.duration || 0);
+    });
+  });
+}
+
+export async function createClip(
+  options: TrimOptions,
+  onProgress?: (percent: number, status?: string) => void
+): Promise<{ videoPath: string; clipId: string }> {
   ensureDirectories();
 
   const inputPath = getTempPath(`${options.videoId}.mp4`);
@@ -86,47 +61,70 @@ export async function createClip(options: TrimOptions): Promise<{ videoPath: str
   const baseName = `${prefix}${safeTitle}`;
   const outputVideoPath = getClipPath(`${baseName}.mp4`);
 
-  // Create a unique ID for this clip processing session to avoid collisions
-  const clipId = Buffer.from(`${options.videoId}-${safeTitle}`).toString('hex').slice(0, 12);
-  const thumbDir = getThumbTempDir(clipId);
+  // Use baseName (prefix + title) as clipId for readability and consistent naming
+  const clipId = baseName;
+  const thumbDir = getThumbTempDir();
 
   console.log(`[trimmer] Creating clip: ${baseName}.mp4 (${options.startTime}s for ${options.duration}s)`);
 
-  // 1. Create the video clip
+  // 1. Create the video clip with intro and ending
+  const introPath = path.join(process.cwd(), 'static', 'intro.mp4');
+  const endingPath = path.join(process.cwd(), 'static', 'ending.mp4');
+
+  // Get durations for accurate progress
+  const introDuration = await getDuration(introPath).catch(() => 0);
+  const endingDuration = await getDuration(endingPath).catch(() => 0);
+  const totalDuration = introDuration + options.duration + endingDuration;
+
+  if (onProgress) onProgress(0, 'Merging intro, clip and ending...');
+
   await new Promise<void>((resolve, reject) => {
-    ffmpeg(inputPath)
-      .setStartTime(options.startTime)
-      .setDuration(options.duration)
+    const command = ffmpeg()
+      .input(introPath)
+      .input(inputPath)
+      .inputOptions(['-ss ' + options.startTime, '-t ' + options.duration])
+      .input(endingPath)
+      .complexFilter([
+        // Normalize all to 1080p, 30fps, same timebase to avoid concat issues
+        '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v0]',
+        '[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v1]',
+        '[2:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v2]',
+        // Ensure all have audio or generate silence if missing (simplified concat for now assuming audio exists)
+        '[v0][0:a][v1][1:a][v2][2:a]concat=n=3:v=1:a=1[v][a]'
+      ])
+      .map('[v]')
+      .map('[a]')
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .outputOptions(['-preset superfast', '-crf 23', '-movflags +faststart'])
       .output(outputVideoPath)
-      .videoCodec('copy')
-      .audioCodec('copy')
+      .on('start', (cmd) => console.log(`[trimmer] Command: ${cmd}`))
+      .on('progress', (progress) => {
+        if (onProgress && progress.timemark) {
+          const parts = progress.timemark.split(':').map(parseFloat);
+          const currentSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+          // 0-90% for merging
+          const percent = Math.min(90, (currentSeconds / totalDuration) * 90);
+          onProgress(percent, `Rendering video: ${Math.round(percent)}%`);
+        }
+      })
       .on('end', () => resolve())
-      .on('error', (err) => reject(err))
-      .run();
+      .on('error', (err) => {
+        console.error('[trimmer] FFmpeg Concatenation Error:', err);
+        reject(err);
+      });
+
+    command.run();
   });
 
-  // 2. Automatically generate multiple thumbnails in the temp folder
-  console.log(`[trimmer] Generating 5 thumbnail variants in temp...`);
+  // 2. Automatically generate a single default thumbnail (at 30%)
+  if (onProgress) onProgress(91, 'Generating default thumbnail...');
+  console.log(`[trimmer] Generating default thumbnail for ${clipId}...`);
 
-  const timestamps: { label: string; time: number }[] = [];
+  const defaultTimestamp = totalDuration * 0.3;
+  const thumbPath = path.join(thumbDir, `${clipId}-thumb-1.jpg`);
+  await extractThumbnail(outputVideoPath, defaultTimestamp, thumbPath);
 
-  // Option 1: Loudest peak
-  const peakTime = await getLoudestTimestamp(outputVideoPath);
-  timestamps.push({ label: 'peak', time: peakTime });
-
-  // Options 2-5: Distributed points (20%, 40%, 60%, 80%)
-  const percentages = [0.2, 0.4, 0.6, 0.8];
-  percentages.forEach((p, i) => {
-    timestamps.push({ label: `v${i + 1}`, time: options.duration * p });
-  });
-
-  // Generate thumbnails in parallel
-  await Promise.all(
-    timestamps.map((t, index) => {
-      const thumbPath = path.join(thumbDir, `thumb-${index + 1}.jpg`);
-      return extractThumbnail(outputVideoPath, t.time, thumbPath);
-    })
-  );
-
+  if (onProgress) onProgress(100, 'Clip created successfully');
   return { videoPath: outputVideoPath, clipId };
 }

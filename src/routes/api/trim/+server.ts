@@ -4,47 +4,68 @@ import { createClip } from '$lib/server/trimmer';
 import type { EpisodeClip } from '$lib/types';
 
 export const POST: RequestHandler = async ({ request }) => {
-  try {
-    const { videoId, clips, prefix } = await request.json() as {
-      videoId: string,
-      clips: EpisodeClip[],
-      prefix?: string
-    };
+  const { videoId, clips, prefix } = (await request.json()) as {
+    videoId: string;
+    clips: EpisodeClip[];
+    prefix?: string;
+  };
 
-    if (!videoId || !clips || clips.length === 0) {
-      return json({ error: 'Missing videoId or clips' }, { status: 400 });
-    }
-
-    console.log(`[api/trim] Starting batch trim for video ${videoId} (${clips.length} clips)`);
-
-    const results = [];
-    for (const clip of clips) {
-      try {
-        const { videoPath, clipId } = await createClip({
-          videoId,
-          clipTitle: clip.title,
-          startTime: clip.startTime,
-          duration: clip.duration,
-          outputPrefix: prefix
-        });
-        // We return the clipId so the frontend can request the temporary thumbnails
-        results.push({
-          title: clip.title,
-          path: videoPath,
-          clipId: clipId,
-          success: true
-        });
-      } catch (err: unknown) {
-        const error = err as Error;
-        console.error(`[api/trim] Failed to trim clip: ${clip.title}`, error);
-        results.push({ title: clip.title, error: error.message, success: false });
-      }
-    }
-
-    return json({ success: true, results });
-  } catch (err: unknown) {
-    const error = err as Error;
-    console.error('[api/trim] Request error:', error);
-    return json({ error: error.message || 'Trim processing failed' }, { status: 500 });
+  if (!videoId || !clips || clips.length === 0) {
+    return json({ error: 'Missing videoId or clips' }, { status: 400 });
   }
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: string, data: Record<string, unknown> | { success: boolean }) => {
+        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+      };
+
+      console.log(`[api/trim] Starting batch trim for video ${videoId} (${clips.length} clips)`);
+
+      for (let i = 0; i < clips.length; i++) {
+        const clip = clips[i];
+        try {
+          send('clip-start', { title: clip.title, index: i, total: clips.length });
+
+          const { videoPath, clipId } = await createClip(
+            {
+              videoId,
+              clipTitle: clip.title,
+              startTime: clip.startTime,
+              duration: clip.duration,
+              outputPrefix: prefix
+            },
+            (percent, status) => {
+              send('clip-progress', { title: clip.title, index: i, percent, status });
+            }
+          );
+
+          send('clip-complete', {
+            title: clip.title,
+            index: i,
+            path: videoPath,
+            clipId: clipId,
+            success: true
+          });
+        } catch (err: unknown) {
+          const error = err as Error;
+          console.error(`[api/trim] Failed to trim clip: ${clip.title}`, error);
+          send('clip-error', { title: clip.title, index: i, error: error.message });
+        }
+      }
+
+      send('all-complete', { success: true });
+      controller.close();
+    }
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive'
+    }
+  });
 };

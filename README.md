@@ -1,4 +1,4 @@
-# KNCELADOS AUTOMATOR 🎬
+# KNC CLIPS 🎬
 
 Herramienta profesional para la extracción de clips de YouTube con motor de branding automático para miniaturas de marketing.
 

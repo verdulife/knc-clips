@@ -25,4 +25,4 @@ vite.config.ts.timestamp-*
 # App Storage
 /temp
 /clips
-/cookies.txt
+cookies.txt

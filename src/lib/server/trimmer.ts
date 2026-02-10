@@ -28,6 +28,7 @@ export async function extractThumbnail(videoPath: string, timestamp: number, out
       .frames(1)
       .outputOptions(['-q:v 2']) // High quality JPG
       .output(outputPath)
+      .outputOptions('-y')
       .on('end', () => {
         console.log(`[trimmer] Thumbnail generated at ${timestamp}s: ${outputPath}`);
         resolve();

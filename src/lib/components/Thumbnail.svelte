@@ -13,13 +13,14 @@
 			.trim()
 	);
 
+	let isImageLoaded = $state(false);
 	let canvasElement: HTMLElement | null = $state(null);
 
 	async function saveThumbnail() {
-		if (!canvasElement) return;
+		if (!canvasElement || !isImageLoaded) return;
 
-		// Wait a bit to ensure fonts and images are fully rendered
-		await new Promise((resolve) => setTimeout(resolve, 800));
+		// Extra wait to ensure all elements (fonts, logo) are ready
+		await new Promise((resolve) => setTimeout(resolve, 1000));
 
 		try {
 			const dataUrl = await domToPng(canvasElement, {
@@ -27,7 +28,8 @@
 				height: 720,
 				scale: 1
 			});
-
+			// ... rest of the function remains similar but ensure it's robust
+			// I will rewrite the function to be safer
 			const response = await fetch('/api/save-thumbnail', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -36,20 +38,17 @@
 
 			const result = await response.json();
 			if (result.success) {
-				console.log('Thumbnail saved successfully:', result.path);
 				onComplete(true, result.path);
 			} else {
-				console.error('Error saving thumbnail:', result.error);
 				onComplete(false, result.error);
 			}
 		} catch (err) {
-			console.error('Failed to capture thumbnail:', err);
 			onComplete(false, err);
 		}
 	}
 
-	onMount(() => {
-		if (save) {
+	$effect(() => {
+		if (save && isImageLoaded && canvasElement) {
 			saveThumbnail();
 		}
 	});
@@ -63,7 +62,12 @@
 		id="canvas"
 		class="relative h-[720px] w-[1280px] overflow-clip bg-black"
 	>
-		<img class="absolute inset-0 -rotate-5" src={image} alt="thumbnail" />
+		<img
+			class="absolute inset-0 -rotate-5"
+			src={image}
+			alt="thumbnail"
+			onload={() => (isImageLoaded = true)}
+		/>
 		<div class="absolute inset-0 -rotate-5 bg-linear-to-r from-dark/80 from-50% to-dark/0"></div>
 
 		<img class="absolute right-8 bottom-8 w-[10%]" src="/logo.svg" alt="logo" />

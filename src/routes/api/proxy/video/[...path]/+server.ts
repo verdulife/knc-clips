@@ -37,7 +37,9 @@ export const GET: RequestHandler = ({ params }) => {
         'Content-Type': contentType,
         'Content-Length': stats.size.toString(),
         'Accept-Ranges': 'bytes',
-        'Cache-Control': 'public, max-age=3600'
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
       }
     });
   } catch (err) {

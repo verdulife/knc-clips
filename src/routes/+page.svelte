@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { EpisodeMetadata, EpisodeClip } from '$lib/types';
 	import Thumbnail from '$lib/components/Thumbnail.svelte';
+	import VisualScrubber from '$lib/components/VisualScrubber.svelte';
 
 	// State for the UI
 	let youtubeUrl = $state('https://www.youtube.com/watch?v=CHL1sJbUytg');
@@ -21,11 +22,15 @@
 				clipId?: string;
 				selectedThumb?: number;
 				masteredFilename?: string;
+				lastUpdated?: number;
 		  }[]
 		| null
 	>(null);
 	let previewVideoUrl = $state<string | null>(null);
+	let previewClipId = $state<string | null>(null);
 	let videoElement = $state<HTMLVideoElement | null>(null);
+	let videoDuration = $state(0);
+	let isPaused = $state(true);
 	let zoomedThumb = $state<{
 		clipId: string;
 		index: number | string;
@@ -39,8 +44,66 @@
 		resultIndex: number;
 		thumbIndex: number;
 	} | null>(null);
+	let showControls = $state(true);
+	let currentTime = $state(0);
+	let controlsTimeout: ReturnType<typeof setTimeout>;
+
+	function resetControlsTimeout() {
+		showControls = true;
+		clearTimeout(controlsTimeout);
+		if (!isPaused) {
+			controlsTimeout = setTimeout(() => {
+				showControls = false;
+			}, 3000);
+		}
+	}
+
+	$effect(() => {
+		if (isPaused) {
+			showControls = true;
+			clearTimeout(controlsTimeout);
+		} else {
+			resetControlsTimeout();
+		}
+	});
+
+	// Keyboard Shortcuts
+	function handleKeydown(e: KeyboardEvent) {
+		if (!videoElement) return;
+
+		// Don't trigger if user is typing in an input
+		if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+
+		const step = 1 / 30; // Default to 30fps
+
+		switch (e.key.toLowerCase()) {
+			case 'k':
+			case ' ':
+				e.preventDefault();
+				if (videoElement.paused) videoElement.play();
+				else videoElement.pause();
+				break;
+			case 'j':
+				e.preventDefault();
+				videoElement.currentTime -= 10;
+				break;
+			case 'l':
+				e.preventDefault();
+				videoElement.currentTime += 10;
+				break;
+			case ',':
+				e.preventDefault();
+				videoElement.currentTime = Math.max(0, videoElement.currentTime - step);
+				break;
+			case '.':
+				e.preventDefault();
+				videoElement.currentTime = Math.min(videoElement.duration, videoElement.currentTime + step);
+				break;
+		}
+	}
 
 	function handlePreview(clipId: string) {
+		previewClipId = clipId;
 		previewVideoUrl = `/api/proxy/video/${encodeURIComponent(clipId)}.mp4`;
 	}
 
@@ -84,7 +147,7 @@
 				const resIdx = trimResults?.findIndex((r) => r.clipId === decodeURIComponent(clipId));
 				if (resIdx !== undefined && resIdx !== -1) {
 					generatingThumb = {
-						image: data.thumbUrl,
+						image: `${data.thumbUrl}?t=${Date.now()}`,
 						clipTitle: trimResults![resIdx].title,
 						episodeTitle: formattedIdentifier
 							? `[${formattedIdentifier}] ${metadata!.title}`
@@ -294,7 +357,7 @@
 				: `/api/proxy/thumbnail/${clipId}-thumb-${thumbIndex}.jpg`;
 
 		generatingThumb = {
-			image: imgPath,
+			image: `${imgPath}?t=${Date.now()}`,
 			clipTitle: result.title,
 			episodeTitle: formattedIdentifier
 				? `[${formattedIdentifier}] ${metadata.title}`
@@ -324,9 +387,12 @@
 		const h = Math.floor(seconds / 3600);
 		const m = Math.floor((seconds % 3600) / 60);
 		const s = Math.floor(seconds % 60);
-		return `${h > 0 ? h + ':' : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+		const f = Math.floor((seconds % 1) * 30); // 30fps
+		return `${h > 0 ? h + ':' : ''}${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}:${f.toString().padStart(2, '0')}`;
 	}
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <main
 	class="grid h-screen grid-cols-[450px_1fr] overflow-hidden font-sans selection:bg-zinc-800 selection:text-white"
@@ -509,9 +575,9 @@
 	<!-- Main Content: Studio Monitor & Output stack -->
 	<section class="flex h-full flex-col overflow-hidden bg-[#030303]">
 		<!-- Top: Master Monitor (Fixed 45%) -->
-		<div class="h-[45%] shrink-0 border-b border-zinc-900 bg-black p-8">
+		<div class="h-[50%] shrink-0 border-b border-zinc-900 bg-black">
 			<div class="flex h-full flex-col">
-				<div class="mb-4 flex shrink-0 items-center justify-between">
+				<div class="mb-4 flex shrink-0 items-center justify-between p-4">
 					<div class="flex items-center gap-3">
 						<div
 							class="size-1.5 {previewVideoUrl
@@ -554,26 +620,213 @@
 					</div>
 				</div>
 
+				<!-- Video Surface -->
 				<div
-					class="group relative min-h-0 w-full flex-1 overflow-hidden border border-zinc-900 bg-zinc-950 shadow-inner"
+					class="group relative flex-1 overflow-hidden border border-zinc-900 bg-black shadow-2xl ring-1 ring-white/5 transition-all hover:border-zinc-700"
+					onmousemove={resetControlsTimeout}
+					role="none"
 				>
 					{#if previewVideoUrl}
-						<video
-							bind:this={videoElement}
-							src={previewVideoUrl}
-							controls
-							autoplay
-							class="h-full w-full object-contain"
-						>
-							<track kind="captions" />
-						</video>
+						<div class="relative h-full w-full bg-black">
+							<video
+								bind:this={videoElement}
+								bind:duration={videoDuration}
+								bind:paused={isPaused}
+								bind:currentTime
+								src={previewVideoUrl}
+								class="h-full w-full object-contain"
+								onclick={() => (isPaused = !isPaused)}
+							>
+								<track kind="captions" />
+							</video>
+
+							<!-- Gradient Scrim (YouTube style) -->
+							<div
+								class="pointer-events-none absolute inset-0 bg-linear-to-t from-black/90 via-transparent to-transparent transition-opacity duration-300 {showControls
+									? 'opacity-100'
+									: 'opacity-0'}"
+							></div>
+
+							<!-- Controls Overlay -->
+							<div
+								class="absolute inset-0 flex flex-col justify-end p-4 transition-opacity duration-300 {showControls
+									? 'opacity-100'
+									: 'opacity-0'}"
+							>
+								<!-- Visual Scrubber (Integrated into overlay) -->
+								<div class="mb-2">
+									<VisualScrubber {videoElement} duration={videoDuration} clipId={previewClipId} />
+								</div>
+
+								<!-- Control Bar -->
+								<div class="flex items-center gap-6">
+									<div class="flex items-center gap-4">
+										<!-- Play/Pause -->
+										<button
+											onclick={() => (isPaused = !isPaused)}
+											class="group/btn relative flex size-8 items-center justify-center text-white transition-transform active:scale-95"
+											title={isPaused ? 'Play (k)' : 'Pause (k)'}
+										>
+											{#if isPaused}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													width="24"
+													height="24"
+													viewBox="0 0 24 24"
+													fill="currentColor"><path d="M8 5.14v14l11-7-11-7z" /></svg
+												>
+											{:else}
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													width="24"
+													height="24"
+													viewBox="0 0 24 24"
+													fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg
+												>
+											{/if}
+										</button>
+
+										<!-- Frame Navigation -->
+										<div class="flex items-center gap-2">
+											<button
+												onclick={() => videoElement && (videoElement.currentTime -= 1 / 30)}
+												class="text-zinc-400 transition-colors hover:text-white"
+												title="Prev Frame (,)"
+											>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													width="18"
+													height="18"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.5"
+													stroke-linecap="round"
+													stroke-linejoin="round"><path d="m15 18-6-6 6-6" /></svg
+												>
+											</button>
+											<button
+												onclick={() => videoElement && (videoElement.currentTime += 1 / 30)}
+												class="text-zinc-400 transition-colors hover:text-white"
+												title="Next Frame (.)"
+											>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													width="18"
+													height="18"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2.5"
+													stroke-linecap="round"
+													stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
+												>
+											</button>
+										</div>
+
+										<!-- Time Display -->
+										<div
+											class="flex items-center gap-1 font-mono text-[11px] font-medium text-white"
+										>
+											<span>{formatTime(currentTime)}</span>
+											<span class="text-zinc-500">/</span>
+											<span class="text-zinc-400">{formatTime(videoDuration)}</span>
+										</div>
+									</div>
+
+									<div class="flex-1"></div>
+
+									<!-- Quick Actions (Start/End) -->
+									<div class="flex items-center gap-4">
+										<button
+											onclick={() => videoElement && (videoElement.currentTime = 0)}
+											class="text-zinc-500 transition-colors hover:text-white"
+											title="Jump to Start"
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												width="14"
+												height="14"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2.5"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												><polygon points="19 20 9 12 19 4 19 20" /><line
+													x1="5"
+													y1="19"
+													x2="5"
+													y2="5"
+												/></svg
+											>
+										</button>
+										<button
+											onclick={() =>
+												videoElement && (videoElement.currentTime = videoElement.duration)}
+											class="text-zinc-500 transition-colors hover:text-white"
+											title="Jump to End"
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												width="14"
+												height="14"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2.5"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												><polygon points="5 4 15 12 5 20 5 4" /><line
+													x1="19"
+													y1="5"
+													x2="19"
+													y2="19"
+												/></svg
+											>
+										</button>
+									</div>
+								</div>
+							</div>
+						</div>
 					{:else}
-						<div class="flex h-full flex-col items-center justify-center space-y-4 opacity-20">
-							<div class="h-px w-12 bg-zinc-500"></div>
-							<p class="text-[10px] font-black tracking-[0.5em] text-zinc-500 uppercase italic">
-								Awaiting Master Feed
+						<div class="flex h-full flex-col items-center justify-center p-12">
+							<div class="relative mb-8">
+								<div class="absolute -inset-8 animate-pulse rounded-full bg-brand/5 blur-3xl"></div>
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="48"
+									height="48"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="1"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									class="text-zinc-800"
+								>
+									<path d="M12 2v20M2 12h20" />
+								</svg>
+							</div>
+							<p
+								class="text-center font-mono text-[9px] font-black tracking-[0.5em] text-zinc-600 uppercase"
+							>
+								Awaiting Input Source...
 							</p>
-							<div class="h-px w-12 bg-zinc-500"></div>
+						</div>
+					{/if}
+
+					{#if previewVideoUrl}
+						<div class="absolute top-6 right-6 z-50 flex flex-col gap-3">
+							<button
+								onclick={handleCapture}
+								class="flex items-center gap-4 border border-white bg-white px-6 py-3 shadow-lg transition-all hover:bg-zinc-200"
+							>
+								<div class="size-1.5 animate-pulse rounded-full bg-black"></div>
+								<span class="text-[10px] font-black tracking-[0.2em] text-black uppercase">
+									Capture & Master Frame
+								</span>
+							</button>
 						</div>
 					{/if}
 				</div>
@@ -581,163 +834,152 @@
 		</div>
 
 		<!-- Bottom: Studio Output (Switchable Content, Scrollable 55%) -->
-		<div class="custom-scrollbar flex-1 overflow-y-auto p-12">
+		<div class="custom-scrollbar flex-1 overflow-y-auto p-8">
 			{#if trimResults && trimResults.length > 0}
-				<div class="animate-in fade-in mx-auto max-w-6xl space-y-12 pb-24 duration-700">
-					<div class="flex items-center gap-6">
-						<h3
-							class="text-xs font-black tracking-[0.5em] whitespace-nowrap text-zinc-500 uppercase"
-						>
-							Mastered Output Selection
-						</h3>
-						<div class="h-px flex-1 bg-zinc-900"></div>
-					</div>
-
-					<div class="grid grid-cols-1 gap-12">
+				<div class="animate-in fade-in space-y-12 pb-24 duration-700">
+					<div class="grid grid-cols-1 gap-6">
 						{#each trimResults as result, i}
 							<div
-								class="group animate-in slide-in-from-bottom-4 space-y-8 border-l border-zinc-900 pl-8 transition-colors duration-500 hover:border-zinc-700"
+								class="group animate-in slide-in-from-bottom-4 flex cursor-pointer items-center gap-8 border-l border-zinc-900 pl-8 transition-colors duration-500 hover:border-brand hover:bg-zinc-950/30"
+								onclick={() => result.success && result.clipId && handlePreview(result.clipId)}
+								role="button"
+								tabindex="0"
+								onkeydown={(e) =>
+									e.key === 'Enter' &&
+									result.success &&
+									result.clipId &&
+									handlePreview(result.clipId)}
 							>
-								<div class="flex items-center justify-between">
-									<div class="space-y-1">
-										<p class="text-[9px] font-black tracking-widest text-zinc-600 uppercase">
-											Output Node #{i + 1}
-										</p>
-										<h4 class="text-xl font-black tracking-tight text-white uppercase">
-											{result.title}
-										</h4>
+								{#if result.success && result.clipId}
+									<!-- Thumbnail Left -->
+									<div
+										class="group/thumb relative aspect-video w-48 shrink-0 overflow-hidden border border-zinc-900 bg-black transition-all hover:border-white {result.selectedThumb
+											? 'border-brand ring-1 ring-brand'
+											: ''}"
+									>
+										<img
+											src={result.masteredFilename
+												? `/api/proxy/video/${encodeURIComponent(result.masteredFilename)}?t=${result.lastUpdated || 0}`
+												: result.selectedThumb === 99
+													? `/api/proxy/thumbnail/${result.clipId}-thumb-custom.jpg?t=${result.lastUpdated || 0}`
+													: `/api/proxy/thumbnail/${result.clipId}-thumb-1.jpg?t=${result.lastUpdated || 0}`}
+											alt="Master Thumbnail"
+											class="h-full w-full object-cover transition-all"
+										/>
+
+										<button
+											onclick={() =>
+												(zoomedThumb = {
+													clipId: result.clipId!,
+													index: result.selectedThumb === 99 ? 99 : 1,
+													masteredFilename: result.masteredFilename
+												})}
+											class="absolute top-2 right-2 bg-black/80 p-1.5 opacity-0 transition-opacity group-hover/thumb:opacity-100 hover:bg-white hover:text-black"
+											title="Preview Large"
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												width="10"
+												height="10"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="3"
+												stroke-linecap="round"
+												stroke-linejoin="round"
+											>
+												<circle cx="11" cy="11" r="8" /><line
+													x1="21"
+													y1="21"
+													x2="16.65"
+													y2="16.65"
+												/>
+											</svg>
+										</button>
 									</div>
-									<div class="flex items-center gap-6">
-										<div class="flex items-center gap-4">
-											{#if result.success && result.clipId}
+
+									<!-- Info & Actions Right -->
+									<div class="flex-1 space-y-3">
+										<div class="flex items-center justify-between">
+											<h4
+												class="text-sm font-black tracking-tight text-white uppercase transition-colors group-hover:text-brand"
+											>
+												{result.title}
+											</h4>
+											<p
+												class="font-mono text-[9px] font-black tracking-widest text-zinc-700 uppercase"
+											>
+												1080P HEVC
+											</p>
+										</div>
+
+										<div class="flex items-center gap-6">
+											<div class="flex items-center gap-4">
 												<button
-													onclick={() => handlePreview(result.clipId!)}
-													class="text-[9px] font-black tracking-widest text-zinc-500 uppercase transition-colors hover:text-white"
-												>
-													Preview
-												</button>
-												<div class="h-4 w-px bg-zinc-900"></div>
-												<button
-													onclick={() => handleDownload(result.clipId!, result.title)}
+													onclick={(e) => {
+														e.stopPropagation();
+														handleDownload(result.clipId!, result.title);
+													}}
 													class="text-[9px] font-black tracking-widest text-zinc-400 uppercase transition-colors hover:text-white"
 												>
 													Export MP4
 												</button>
 												{#if result.masteredFilename}
-													<div class="h-4 w-px bg-zinc-900"></div>
+													<div class="h-3 w-px bg-zinc-900"></div>
 													<button
-														onclick={() => handleDownloadThumbnail(result.masteredFilename!)}
+														onclick={(e) => {
+															e.stopPropagation();
+															handleDownloadThumbnail(result.masteredFilename!);
+														}}
 														class="text-[9px] font-black tracking-widest text-brand uppercase transition-colors hover:text-white"
 													>
 														Export PNG
 													</button>
 												{/if}
-												<div class="ml-2 h-4 w-px bg-zinc-900"></div>
-											{/if}
-										</div>
-
-										<div class="text-right">
-											<p class="text-[9px] font-bold text-zinc-700 uppercase">Status</p>
-											<p
-												class="text-[10px] font-black tracking-widest uppercase {result.success
-													? 'text-green-500'
-													: 'text-red-500'}"
-											>
-												{result.success ? 'Validated' : 'Error'}
-											</p>
-										</div>
-										<div class="h-10 w-px bg-zinc-900"></div>
-										<div class="text-right">
-											<p class="text-[9px] font-bold text-zinc-700 uppercase">Format</p>
-											<p class="text-[10px] font-black tracking-widest text-white uppercase">
-												1080P HEVC
-											</p>
+												<div class="h-3 w-px bg-zinc-900"></div>
+												<button
+													onclick={(e) => {
+														e.stopPropagation();
+														const cleanEpisodeTitle = metadata!.title.replace(
+															/^KNC\s+\d+[xX]\d+\s*\|\s*/i,
+															''
+														);
+														const fullTitle = `${result.title} | ${cleanEpisodeTitle}`;
+														navigator.clipboard.writeText(fullTitle);
+													}}
+													class="text-[9px] font-black tracking-widest text-zinc-500 uppercase transition-colors hover:text-white"
+												>
+													Copy Title
+												</button>
+												<div class="h-3 w-px bg-zinc-900"></div>
+												<button
+													onclick={(e) => {
+														e.stopPropagation();
+														if (!metadata?.description) return;
+														const cleanedDesc = metadata.description
+															.split('\n')
+															.filter(
+																(line) =>
+																	!/\d{1,2}:\d{2}/.test(line) &&
+																	!line.toLowerCase().includes('temas:')
+															)
+															.join('\n')
+															.trim();
+														navigator.clipboard.writeText(cleanedDesc);
+													}}
+													class="text-[9px] font-black tracking-widest text-zinc-500 uppercase transition-colors hover:text-white"
+												>
+													Copy Desc
+												</button>
+											</div>
 										</div>
 									</div>
-								</div>
-
-								{#if result.success && result.clipId}
-									<div class="space-y-4">
-										<div class="flex items-center gap-3">
-											<p class="text-[9px] font-black tracking-widest text-brand uppercase">
-												Master Portrait
-											</p>
-											<div class="h-px flex-1 bg-zinc-950"></div>
-										</div>
-										<div class="flex gap-6">
-											<div
-												class="group relative aspect-video w-64 overflow-hidden border border-zinc-900 bg-black transition-all hover:border-white {result.selectedThumb
-													? 'border-brand ring-1 ring-brand'
-													: ''}"
-											>
-												<img
-													src={result.masteredFilename
-														? `/api/proxy/video/${encodeURIComponent(result.masteredFilename)}`
-														: result.selectedThumb === 99
-															? `/api/proxy/thumbnail/${result.clipId}-thumb-custom.jpg`
-															: `/api/proxy/thumbnail/${result.clipId}-thumb-1.jpg`}
-													alt="Master Thumbnail"
-													class="h-full w-full object-cover transition-all"
-												/>
-
-												{#if result.selectedThumb}
-													<div
-														class="pointer-events-none absolute inset-0 flex items-end bg-brand/5"
-													>
-														<span
-															class="w-full bg-brand py-1 text-center text-[8px] font-black text-white uppercase"
-														>
-															MASTER ASSET READY
-														</span>
-													</div>
-												{/if}
-
-												<button
-													onclick={() =>
-														(zoomedThumb = {
-															clipId: result.clipId!,
-															index: result.selectedThumb === 99 ? 99 : 1,
-															masteredFilename: result.masteredFilename
-														})}
-													class="absolute top-2 right-2 bg-black/80 p-1.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white hover:text-black"
-													title="Preview Large"
-												>
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														width="12"
-														height="12"
-														viewBox="0 0 24 24"
-														fill="none"
-														stroke="currentColor"
-														stroke-width="3"
-														stroke-linecap="round"
-														stroke-linejoin="round"
-													>
-														<circle cx="11" cy="11" r="8" /><line
-															x1="21"
-															y1="21"
-															x2="16.65"
-															y2="16.65"
-														/>
-													</svg>
-												</button>
-											</div>
-
-											<div class="flex flex-col justify-center space-y-3">
-												<p
-													class="max-w-xs text-[9px] leading-relaxed tracking-widest text-zinc-600 uppercase"
-												>
-													High-quality frame captured at 30% of duration. Use the Master Monitor to
-													select a custom frame if required.
-												</p>
-												<button
-													onclick={() => handleSelectThumbnail(result.clipId!, 1, i)}
-													class="w-fit border border-zinc-800 px-4 py-2 text-[8px] font-black tracking-widest text-zinc-400 uppercase transition-all hover:border-white hover:text-white"
-												>
-													Remaster Default
-												</button>
-											</div>
-										</div>
+								{:else}
+									<div class="flex h-24 items-center gap-4 text-red-500">
+										<div class="size-1 rounded-full bg-red-500"></div>
+										<p class="text-[10px] font-black tracking-widest uppercase">
+											Failed: {result.title}
+										</p>
 									</div>
 								{/if}
 							</div>
@@ -791,11 +1033,11 @@
 				class="relative aspect-video w-full max-w-6xl overflow-hidden border border-zinc-800 shadow-[0_0_100px_rgba(0,0,0,1)]"
 			>
 				<img
-					src={zoomedThumb.masteredFilename
-						? `/api/proxy/video/${encodeURIComponent(zoomedThumb.masteredFilename)}`
-						: zoomedThumb.index === 99
-							? `/api/proxy/thumbnail/${zoomedThumb.clipId}-thumb-custom.jpg`
-							: `/api/proxy/thumbnail/${zoomedThumb.clipId}-thumb-${zoomedThumb.index}.jpg`}
+					src={zoomedThumb!.masteredFilename
+						? `/api/proxy/video/${encodeURIComponent(zoomedThumb!.masteredFilename)}`
+						: zoomedThumb!.index === 99
+							? `/api/proxy/thumbnail/${zoomedThumb!.clipId}-thumb-custom.jpg`
+							: `/api/proxy/thumbnail/${zoomedThumb!.clipId}-thumb-${zoomedThumb!.index}.jpg`}
 					alt="Preview"
 					class="h-full w-full object-contain"
 				/>
@@ -838,8 +1080,15 @@
 					if (success && generatingThumb) {
 						const { resultIndex, thumbIndex, filename } = generatingThumb;
 						if (trimResults?.[resultIndex]) {
-							trimResults[resultIndex].selectedThumb = thumbIndex;
-							trimResults[resultIndex].masteredFilename = filename;
+							// Update with a timestamp to force image refresh in the UI
+							const updatedResults = [...trimResults];
+							updatedResults[resultIndex] = {
+								...updatedResults[resultIndex],
+								selectedThumb: thumbIndex,
+								masteredFilename: filename,
+								lastUpdated: Date.now()
+							};
+							trimResults = updatedResults;
 						}
 					}
 					generatingThumb = null;

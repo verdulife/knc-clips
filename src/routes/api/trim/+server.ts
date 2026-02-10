@@ -4,10 +4,11 @@ import { createClip } from '$lib/server/trimmer';
 import type { EpisodeClip } from '$lib/types';
 
 export const POST: RequestHandler = async ({ request }) => {
-  const { videoId, clips, prefix } = (await request.json()) as {
+  const { videoId, clips, prefix, transcription } = (await request.json()) as {
     videoId: string;
     clips: EpisodeClip[];
     prefix?: string;
+    transcription?: string;
   };
 
   if (!videoId || !clips || clips.length === 0) {
@@ -29,13 +30,15 @@ export const POST: RequestHandler = async ({ request }) => {
         try {
           send('clip-start', { title: clip.title, index: i, total: clips.length });
 
-          const { videoPath, clipId } = await createClip(
+          const { videoPath, clipId, aiTitle } = await createClip(
             {
               videoId,
               clipTitle: clip.title,
               startTime: clip.startTime,
+              endTime: clip.endTime,
               duration: clip.duration,
-              outputPrefix: prefix
+              outputPrefix: prefix,
+              transcription
             },
             (percent, status) => {
               send('clip-progress', { title: clip.title, index: i, percent, status });
@@ -47,6 +50,7 @@ export const POST: RequestHandler = async ({ request }) => {
             index: i,
             path: videoPath,
             clipId: clipId,
+            aiTitle: aiTitle,
             success: true
           });
         } catch (err: unknown) {

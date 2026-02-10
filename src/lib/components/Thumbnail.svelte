@@ -63,22 +63,24 @@
 		class="relative h-[720px] w-[1280px] overflow-clip bg-black"
 	>
 		<img
-			class="absolute inset-0 -rotate-5"
+			class="absolute inset-0 origin-[60%_50%] scale-140"
 			src={image}
 			alt="thumbnail"
 			onload={() => (isImageLoaded = true)}
 		/>
-		<div class="absolute inset-0 -rotate-5 bg-linear-to-r from-dark/80 from-50% to-dark/0"></div>
+		<div class="absolute inset-0 bg-linear-to-r from-black/80 to-black/0 to-65%"></div>
 
 		<img class="absolute right-8 bottom-8 w-[10%]" src="/logo.svg" alt="logo" />
 
-		<div class="absolute inset-0 z-10 flex size-full -rotate-5 flex-col justify-center gap-8 px-16">
+		<div
+			class="absolute inset-0 z-10 flex size-full -rotate-5 flex-col justify-end gap-8 px-16 pb-32"
+		>
 			<h1
-				class="-mt-10 max-w-[85%] leading-tight text-balance {clipTitle.length < 24
-					? 'text-9xl'
-					: 'text-8xl'}"
+				class="max-w-[65%] leading-tight text-balance {clipTitle.length < 24
+					? 'text-8xl'
+					: 'text-7xl'}"
 			>
-				{clipTitle.toUpperCase()}
+				<span class="text-brand">#</span>{clipTitle.toUpperCase()}
 			</h1>
 			<p class="pl-2 text-2xl font-medium tracking-tight">
 				<span class="text-brand">{open}</span>{content}<span class="text-brand">{close}</span>

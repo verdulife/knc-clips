@@ -20,6 +20,7 @@
 				title: string;
 				success: boolean;
 				clipId?: string;
+				aiTitle?: string;
 				selectedThumb?: number;
 				masteredFilename?: string;
 				lastUpdated?: number;
@@ -268,7 +269,8 @@
 				body: JSON.stringify({
 					videoId: metadata.videoId,
 					clips: selectedClips,
-					prefix: formattedIdentifier
+					prefix: formattedIdentifier,
+					transcription: metadata.transcription
 				})
 			});
 
@@ -312,7 +314,8 @@
 							{
 								title: data.title,
 								success: true,
-								clipId: data.clipId
+								clipId: data.clipId,
+								aiTitle: data.aiTitle
 							}
 						];
 					} else if (event === 'clip-error') {
@@ -906,6 +909,11 @@
 											>
 												{result.title}
 											</h4>
+											{#if result.aiTitle}
+												<p class="text-[11px] font-bold text-brand italic">
+													✨ {result.aiTitle}
+												</p>
+											{/if}
 											<p
 												class="font-mono text-[9px] font-black tracking-widest text-zinc-700 uppercase"
 											>

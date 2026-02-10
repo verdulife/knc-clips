@@ -4,6 +4,7 @@ export interface EpisodeClip {
   endTime: number; // Duration in seconds
   duration: number; // Duration in seconds
   selected?: boolean;
+  aiTitle?: string;
 }
 
 export interface EpisodeMetadata {
@@ -12,5 +13,6 @@ export interface EpisodeMetadata {
   seasonNumber: number | null;
   episodeNumber: number | null;
   description: string;
+  transcription?: string;
   clips: EpisodeClip[];
 }

@@ -13,10 +13,31 @@ export interface TrimOptions {
   videoId: string;
   clipTitle: string;
   startTime: number;
+  endTime: number;
   duration: number;
   outputPrefix?: string;
+  transcription?: string;
 }
 
+import { generateClickbaitTitle } from './ai';
+
+function extractTranscriptionFragment(transcription: string, start: number, end: number): string {
+  // Simple fragment extractor based on [mm:ss] markers
+  const pattern = /\[(\d+):(\d+)\]/g;
+  const matches = [];
+  let match;
+
+  while ((match = pattern.exec(transcription)) !== null) {
+    const timeInSeconds = parseInt(match[1]) * 60 + parseInt(match[2]);
+    matches.push({ time: timeInSeconds, index: match.index });
+  }
+
+  // Find start and end indices in the text
+  const startIndex = matches.filter((m: any) => m.time <= start).pop()?.index || 0;
+  const endIndex = matches.filter((m: any) => m.time >= end).shift()?.index || transcription.length;
+
+  return transcription.substring(startIndex, endIndex).trim();
+}
 
 /**
  * Extracts a high-quality frame from a video at a specific timestamp.
@@ -50,13 +71,23 @@ async function getDuration(inputPath: string): Promise<number> {
   });
 }
 
+
 export async function createClip(
   options: TrimOptions,
   onProgress?: (percent: number, status?: string) => void
-): Promise<{ videoPath: string; clipId: string }> {
+): Promise<{ videoPath: string; clipId: string; aiTitle?: string }> {
   ensureDirectories();
 
   const inputPath = getTempPath(`${options.videoId}.mp4`);
+
+  // 0. AI Title Generation (Optional)
+  let aiTitle: string | undefined = undefined;
+  if (options.transcription) {
+    console.log(`[trimmer] Triggering AI Title generation...`);
+    const fragment = extractTranscriptionFragment(options.transcription, options.startTime, options.endTime);
+    aiTitle = await generateClickbaitTitle(fragment, options.clipTitle);
+  }
+
   const safeTitle = options.clipTitle.replace(/[\\/:*?"<>|]/g, '-');
   const prefix = options.outputPrefix ? `[${options.outputPrefix}] - ` : '';
   const baseName = `${prefix}${safeTitle}`;
@@ -127,5 +158,5 @@ export async function createClip(
   await extractThumbnail(outputVideoPath, defaultTimestamp, thumbPath);
 
   if (onProgress) onProgress(100, 'Clip created successfully');
-  return { videoPath: outputVideoPath, clipId };
+  return { videoPath: outputVideoPath, clipId, aiTitle };
 }

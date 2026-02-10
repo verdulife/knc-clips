@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { readFile as fsReadFile, access, readdir as fsReaddir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const TEMP_DIR = 'temp';
@@ -49,3 +50,21 @@ export function getThumbTempDir() {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+export async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function readFile(path: string): Promise<string> {
+  return fsReadFile(path, 'utf8');
+}
+
+export async function readdir(path: string): Promise<string[]> {
+  return fsReaddir(path);
+}
+

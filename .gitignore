@@ -26,3 +26,7 @@ vite.config.ts.timestamp-*
 /temp
 /clips
 cookies.txt
+
+# Test scripts
+test-*.ts
+test-*.js

@@ -4,7 +4,7 @@
 	import VisualScrubber from '$lib/components/VisualScrubber.svelte';
 
 	// State for the UI
-	let youtubeUrl = $state('https://www.youtube.com/watch?v=CHL1sJbUytg');
+	let youtubeUrl = $state('');
 	let downloadProgress = $state(0);
 	let downloadSpeed = $state<string | null>(null);
 	let downloadEta = $state<string | null>(null);
@@ -24,6 +24,7 @@
 				selectedThumb?: number;
 				masteredFilename?: string;
 				lastUpdated?: number;
+				flipped?: boolean;
 		  }[]
 		| null
 	>(null);
@@ -36,6 +37,7 @@
 		clipId: string;
 		index: number | string;
 		masteredFilename?: string;
+		flipped?: boolean;
 	} | null>(null);
 	let generatingThumb = $state<{
 		image: string;
@@ -44,9 +46,11 @@
 		filename: string;
 		resultIndex: number;
 		thumbIndex: number;
+		flipped?: boolean;
 	} | null>(null);
 	let showControls = $state(true);
 	let currentTime = $state(0);
+	let isRerolling = $state<Record<string, boolean>>({});
 	let controlsTimeout: ReturnType<typeof setTimeout>;
 
 	function resetControlsTimeout() {
@@ -367,7 +371,8 @@
 				: metadata.title,
 			filename: `${formattedIdentifier} - ${result.title}.png`,
 			resultIndex,
-			thumbIndex: typeof thumbIndex === 'number' ? thumbIndex : 99
+			thumbIndex: typeof thumbIndex === 'number' ? thumbIndex : 99,
+			flipped: result.flipped
 		};
 	}
 
@@ -385,6 +390,42 @@
 			? `${metadata.seasonNumber}x${metadata.episodeNumber?.toString().padStart(2, '0')}`
 			: ''
 	);
+
+	async function handleReroll(resultIndex: number) {
+		if (!trimResults || !metadata) return;
+		const result = trimResults[resultIndex];
+		const clip = metadata.clips.find((c) => c.title === result.title);
+		if (!clip) return;
+
+		isRerolling[result.clipId!] = true;
+		try {
+			const response = await fetch('/api/ai/reroll', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					transcription: metadata.transcription,
+					startTime: clip.startTime,
+					endTime: clip.endTime,
+					originalTitle: result.title
+				})
+			});
+
+			if (!response.ok) throw new Error('Reroll failed');
+			const data = await response.json();
+
+			// Update the result in the list
+			const updatedResults = [...trimResults];
+			updatedResults[resultIndex] = {
+				...updatedResults[resultIndex],
+				aiTitle: data.aiTitle
+			};
+			trimResults = updatedResults;
+		} catch (e) {
+			console.error('Reroll error:', e);
+		} finally {
+			isRerolling[result.clipId!] = false;
+		}
+	}
 
 	function formatTime(seconds: number) {
 		const h = Math.floor(seconds / 3600);
@@ -579,23 +620,30 @@
 	<section class="flex h-full flex-col overflow-hidden bg-[#030303]">
 		<!-- Top: Master Monitor (Fixed 45%) -->
 		<div class="h-[50%] shrink-0 border-b border-zinc-900 bg-black">
-			<div class="flex h-full flex-col">
-				<div class="mb-4 flex shrink-0 items-center justify-between p-4">
+			<div
+				class="group relative h-full overflow-hidden shadow-2xl transition-all hover:border-zinc-700"
+				onmousemove={resetControlsTimeout}
+				role="none"
+			>
+				<!-- Monitor Header Overlay -->
+				<div
+					class="pointer-events-none absolute inset-x-0 top-0 z-50 flex items-center justify-between p-6"
+				>
 					<div class="flex items-center gap-3">
 						<div
 							class="size-1.5 {previewVideoUrl
 								? 'animate-pulse bg-brand'
 								: 'bg-zinc-800'} rounded-full"
 						></div>
-						<h3 class="text-[10px] font-black tracking-[0.4em] text-zinc-400 uppercase">
+						<h3 class="text-[10px] font-black tracking-[0.4em] text-zinc-400/80 uppercase">
 							Studio Monitor // {previewVideoUrl ? 'Live Feed' : 'No Signal'}
 						</h3>
 					</div>
-					<div class="flex items-center gap-4">
+					<div class="pointer-events-auto flex items-center gap-4">
 						{#if previewVideoUrl}
 							<button
 								onclick={handleCapture}
-								class="flex items-center gap-2 border border-brand/30 bg-brand/10 px-3 py-1 text-[9px] font-black text-brand uppercase transition-all hover:bg-brand hover:text-white"
+								class="flex items-center gap-2 border border-brand/30 bg-black/50 px-3 py-1 text-[9px] font-black text-brand uppercase backdrop-blur-md transition-all hover:bg-brand hover:text-white"
 							>
 								<svg
 									xmlns="http://www.w3.org/2000/svg"
@@ -615,7 +663,7 @@
 							</button>
 							<button
 								onclick={() => (previewVideoUrl = null)}
-								class="text-[9px] font-black text-zinc-600 uppercase transition-colors hover:text-white"
+								class="text-[9px] font-black text-zinc-600/50 uppercase transition-colors hover:text-white"
 							>
 								Eject Master [X]
 							</button>
@@ -623,216 +671,193 @@
 					</div>
 				</div>
 
-				<!-- Video Surface -->
-				<div
-					class="group relative flex-1 overflow-hidden border border-zinc-900 bg-black shadow-2xl ring-1 ring-white/5 transition-all hover:border-zinc-700"
-					onmousemove={resetControlsTimeout}
-					role="none"
-				>
-					{#if previewVideoUrl}
-						<div class="relative h-full w-full bg-black">
-							<video
-								bind:this={videoElement}
-								bind:duration={videoDuration}
-								bind:paused={isPaused}
-								bind:currentTime
-								src={previewVideoUrl}
-								class="h-full w-full object-contain"
-								onclick={() => (isPaused = !isPaused)}
-							>
-								<track kind="captions" />
-							</video>
+				{#if previewVideoUrl}
+					<div class="relative h-full w-full bg-black">
+						<video
+							bind:this={videoElement}
+							bind:duration={videoDuration}
+							bind:paused={isPaused}
+							bind:currentTime
+							src={previewVideoUrl}
+							class="h-full w-full object-contain"
+							onclick={() => (isPaused = !isPaused)}
+						>
+							<track kind="captions" />
+						</video>
 
-							<!-- Gradient Scrim (YouTube style) -->
-							<div
-								class="pointer-events-none absolute inset-0 bg-linear-to-t from-black/90 via-transparent to-transparent transition-opacity duration-300 {showControls
-									? 'opacity-100'
-									: 'opacity-0'}"
-							></div>
+						<!-- Gradient Scrim (YouTube style) -->
+						<div
+							class="pointer-events-none absolute inset-0 bg-linear-to-t from-black/90 via-transparent to-transparent transition-opacity duration-300 {showControls
+								? 'opacity-100'
+								: 'opacity-0'}"
+						></div>
 
-							<!-- Controls Overlay -->
-							<div
-								class="absolute inset-0 flex flex-col justify-end p-4 transition-opacity duration-300 {showControls
-									? 'opacity-100'
-									: 'opacity-0'}"
-							>
-								<!-- Visual Scrubber (Integrated into overlay) -->
-								<div class="mb-2">
-									<VisualScrubber {videoElement} duration={videoDuration} clipId={previewClipId} />
-								</div>
+						<!-- Controls Overlay -->
+						<div
+							class="absolute inset-0 flex flex-col justify-end p-4 transition-opacity duration-300 {showControls
+								? 'opacity-100'
+								: 'opacity-0'}"
+						>
+							<!-- Visual Scrubber (Integrated into overlay) -->
+							<div class="mb-2">
+								<VisualScrubber {videoElement} duration={videoDuration} clipId={previewClipId} />
+							</div>
 
-								<!-- Control Bar -->
-								<div class="flex items-center gap-6">
-									<div class="flex items-center gap-4">
-										<!-- Play/Pause -->
-										<button
-											onclick={() => (isPaused = !isPaused)}
-											class="group/btn relative flex size-8 items-center justify-center text-white transition-transform active:scale-95"
-											title={isPaused ? 'Play (k)' : 'Pause (k)'}
-										>
-											{#if isPaused}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													width="24"
-													height="24"
-													viewBox="0 0 24 24"
-													fill="currentColor"><path d="M8 5.14v14l11-7-11-7z" /></svg
-												>
-											{:else}
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													width="24"
-													height="24"
-													viewBox="0 0 24 24"
-													fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg
-												>
-											{/if}
-										</button>
-
-										<!-- Frame Navigation -->
-										<div class="flex items-center gap-2">
-											<button
-												onclick={() => videoElement && (videoElement.currentTime -= 1 / 30)}
-												class="text-zinc-400 transition-colors hover:text-white"
-												title="Prev Frame (,)"
+							<!-- Control Bar -->
+							<div class="flex items-center gap-6">
+								<div class="flex items-center gap-4">
+									<!-- Play/Pause -->
+									<button
+										onclick={() => (isPaused = !isPaused)}
+										class="group/btn relative flex size-8 items-center justify-center text-white transition-transform active:scale-95"
+										title={isPaused ? 'Play (k)' : 'Pause (k)'}
+									>
+										{#if isPaused}
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												width="24"
+												height="24"
+												viewBox="0 0 24 24"
+												fill="currentColor"><path d="M8 5.14v14l11-7-11-7z" /></svg
 											>
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													width="18"
-													height="18"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													stroke-width="2.5"
-													stroke-linecap="round"
-													stroke-linejoin="round"><path d="m15 18-6-6 6-6" /></svg
-												>
-											</button>
-											<button
-												onclick={() => videoElement && (videoElement.currentTime += 1 / 30)}
-												class="text-zinc-400 transition-colors hover:text-white"
-												title="Next Frame (.)"
+										{:else}
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												width="24"
+												height="24"
+												viewBox="0 0 24 24"
+												fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg
 											>
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													width="18"
-													height="18"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													stroke-width="2.5"
-													stroke-linecap="round"
-													stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
-												>
-											</button>
-										</div>
+										{/if}
+									</button>
 
-										<!-- Time Display -->
-										<div
-											class="flex items-center gap-1 font-mono text-[11px] font-medium text-white"
-										>
-											<span>{formatTime(currentTime)}</span>
-											<span class="text-zinc-500">/</span>
-											<span class="text-zinc-400">{formatTime(videoDuration)}</span>
-										</div>
-									</div>
-
-									<div class="flex-1"></div>
-
-									<!-- Quick Actions (Start/End) -->
-									<div class="flex items-center gap-4">
+									<!-- Frame Navigation -->
+									<div class="flex items-center gap-2">
 										<button
-											onclick={() => videoElement && (videoElement.currentTime = 0)}
-											class="text-zinc-500 transition-colors hover:text-white"
-											title="Jump to Start"
+											onclick={() => videoElement && (videoElement.currentTime -= 1 / 30)}
+											class="text-zinc-400 transition-colors hover:text-white"
+											title="Prev Frame (,)"
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
-												width="14"
-												height="14"
+												width="18"
+												height="18"
 												viewBox="0 0 24 24"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.5"
 												stroke-linecap="round"
-												stroke-linejoin="round"
-												><polygon points="19 20 9 12 19 4 19 20" /><line
-													x1="5"
-													y1="19"
-													x2="5"
-													y2="5"
-												/></svg
+												stroke-linejoin="round"><path d="m15 18-6-6 6-6" /></svg
 											>
 										</button>
 										<button
-											onclick={() =>
-												videoElement && (videoElement.currentTime = videoElement.duration)}
-											class="text-zinc-500 transition-colors hover:text-white"
-											title="Jump to End"
+											onclick={() => videoElement && (videoElement.currentTime += 1 / 30)}
+											class="text-zinc-400 transition-colors hover:text-white"
+											title="Next Frame (.)"
 										>
 											<svg
 												xmlns="http://www.w3.org/2000/svg"
-												width="14"
-												height="14"
+												width="18"
+												height="18"
 												viewBox="0 0 24 24"
 												fill="none"
 												stroke="currentColor"
 												stroke-width="2.5"
 												stroke-linecap="round"
-												stroke-linejoin="round"
-												><polygon points="5 4 15 12 5 20 5 4" /><line
-													x1="19"
-													y1="5"
-													x2="19"
-													y2="19"
-												/></svg
+												stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg
 											>
 										</button>
 									</div>
+
+									<!-- Time Display -->
+									<div class="flex items-center gap-1 font-mono text-[11px] font-medium text-white">
+										<span>{formatTime(currentTime)}</span>
+										<span class="text-zinc-500">/</span>
+										<span class="text-zinc-400">{formatTime(videoDuration)}</span>
+									</div>
+								</div>
+
+								<div class="flex-1"></div>
+
+								<!-- Quick Actions (Start/End) -->
+								<div class="flex items-center gap-4">
+									<button
+										onclick={() => videoElement && (videoElement.currentTime = 0)}
+										class="text-zinc-500 transition-colors hover:text-white"
+										title="Jump to Start"
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="14"
+											height="14"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.5"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											><polygon points="19 20 9 12 19 4 19 20" /><line
+												x1="5"
+												y1="19"
+												x2="5"
+												y2="5"
+											/></svg
+										>
+									</button>
+									<button
+										onclick={() =>
+											videoElement && (videoElement.currentTime = videoElement.duration)}
+										class="text-zinc-500 transition-colors hover:text-white"
+										title="Jump to End"
+									>
+										<svg
+											xmlns="http://www.w3.org/2000/svg"
+											width="14"
+											height="14"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="2.5"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											><polygon points="5 4 15 12 5 20 5 4" /><line
+												x1="19"
+												y1="5"
+												x2="19"
+												y2="19"
+											/></svg
+										>
+									</button>
 								</div>
 							</div>
 						</div>
-					{:else}
-						<div class="flex h-full flex-col items-center justify-center p-12">
-							<div class="relative mb-8">
-								<div class="absolute -inset-8 animate-pulse rounded-full bg-brand/5 blur-3xl"></div>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									width="48"
-									height="48"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									stroke-width="1"
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									class="text-zinc-800"
-								>
-									<path d="M12 2v20M2 12h20" />
-								</svg>
-							</div>
-							<p
-								class="text-center font-mono text-[9px] font-black tracking-[0.5em] text-zinc-600 uppercase"
+					</div>
+				{:else}
+					<div class="flex h-full flex-col items-center justify-center p-12">
+						<div class="relative mb-8">
+							<div class="absolute -inset-8 animate-pulse rounded-full bg-brand/5 blur-3xl"></div>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								width="48"
+								height="48"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								class="text-zinc-800"
 							>
-								Awaiting Input Source...
-							</p>
+								<path d="M12 2v20M2 12h20" />
+							</svg>
 						</div>
-					{/if}
-
-					{#if previewVideoUrl}
-						<div class="absolute top-6 right-6 z-50 flex flex-col gap-3">
-							<button
-								onclick={handleCapture}
-								class="flex items-center gap-4 border border-white bg-white px-6 py-3 shadow-lg transition-all hover:bg-zinc-200"
-							>
-								<div class="size-1.5 animate-pulse rounded-full bg-black"></div>
-								<span class="text-[10px] font-black tracking-[0.2em] text-black uppercase">
-									Capture & Master Frame
-								</span>
-							</button>
-						</div>
-					{/if}
-				</div>
+						<p
+							class="text-center font-mono text-[9px] font-black tracking-[0.5em] text-zinc-600 uppercase"
+						>
+							Awaiting Input Source...
+						</p>
+					</div>
+				{/if}
 			</div>
 		</div>
 
@@ -870,52 +895,130 @@
 											class="h-full w-full object-cover transition-all"
 										/>
 
-										<button
-											onclick={() =>
-												(zoomedThumb = {
-													clipId: result.clipId!,
-													index: result.selectedThumb === 99 ? 99 : 1,
-													masteredFilename: result.masteredFilename
-												})}
-											class="absolute top-2 right-2 bg-black/80 p-1.5 opacity-0 transition-opacity group-hover/thumb:opacity-100 hover:bg-white hover:text-black"
-											title="Preview Large"
+										<div
+											class="absolute top-2 right-2 flex gap-1 opacity-0 transition-opacity group-hover/thumb:opacity-100"
 										>
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												width="10"
-												height="10"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												stroke-width="3"
-												stroke-linecap="round"
-												stroke-linejoin="round"
+											<button
+												onclick={(e) => {
+													e.stopPropagation();
+													const updated = [...trimResults!];
+													updated[i].flipped = !updated[i].flipped;
+													trimResults = updated;
+													handleSelectThumbnail(
+														result.clipId!,
+														result.selectedThumb === 99 ? 99 : 1,
+														i
+													);
+												}}
+												class="bg-black/80 p-1.5 transition-all hover:bg-brand hover:text-white"
+												title="Mirror Frame"
 											>
-												<circle cx="11" cy="11" r="8" /><line
-													x1="21"
-													y1="21"
-													x2="16.65"
-													y2="16.65"
-												/>
-											</svg>
-										</button>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													width="10"
+													height="10"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="3"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													><path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /><path
+														d="M12 4v1m0 14v1m8-7h1M3 12h1m15.66-6.66-.71.71M6.05 17.95l-.71.71m12.72 0-.71-.71M6.05 6.05l-.71-.71"
+													/></svg
+												>
+											</button>
+											<button
+												onclick={(e) => {
+													e.stopPropagation();
+													zoomedThumb = {
+														clipId: result.clipId!,
+														index: result.selectedThumb === 99 ? 99 : 1,
+														masteredFilename: result.masteredFilename,
+														flipped: result.flipped
+													};
+												}}
+												class="bg-black/80 p-1.5 transition-all hover:bg-white hover:text-black"
+												title="Preview Large"
+											>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													width="10"
+													height="10"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="3"
+													stroke-linecap="round"
+													stroke-linejoin="round"
+												>
+													<circle cx="11" cy="11" r="8" /><line
+														x1="21"
+														y1="21"
+														x2="16.65"
+														y2="16.65"
+													/>
+												</svg>
+											</button>
+										</div>
 									</div>
 
 									<!-- Info & Actions Right -->
 									<div class="flex-1 space-y-3">
 										<div class="flex items-center justify-between">
-											<h4
-												class="text-sm font-black tracking-tight text-white uppercase transition-colors group-hover:text-brand"
-											>
-												{result.title}
-											</h4>
-											{#if result.aiTitle}
-												<p class="text-[11px] font-bold text-brand italic">
-													✨ {result.aiTitle}
-												</p>
-											{/if}
+											<div class="flex flex-col gap-0.5">
+												<div class="flex items-center gap-2">
+													<span
+														class="text-[8px] font-black tracking-widest text-brand/60 uppercase"
+													>
+														{result.aiTitle ? '✨ AI SUGGESTION' : 'ORIGINAL'}
+													</span>
+													{#if result.aiTitle}
+														<button
+															onclick={(e) => {
+																e.stopPropagation();
+																handleReroll(i);
+															}}
+															disabled={isRerolling[result.clipId!]}
+															class="group/reroll flex items-center gap-1 transition-colors hover:text-brand disabled:opacity-30"
+															title="Regenerate Title"
+														>
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																width="8"
+																height="8"
+																viewBox="0 0 24 24"
+																fill="none"
+																stroke="currentColor"
+																stroke-width="3"
+																stroke-linecap="round"
+																stroke-linejoin="round"
+																class={isRerolling[result.clipId!] ? 'animate-spin' : ''}
+																><path
+																	d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+																/><path d="M3 3v5h5" /><path
+																	d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"
+																/><path d="M16 16h5v5" /></svg
+															>
+															<span class="text-[7px] font-black tracking-widest uppercase"
+																>{isRerolling[result.clipId!] ? '...' : 'Reroll'}</span
+															>
+														</button>
+													{/if}
+												</div>
+												<h4
+													class="text-sm font-black tracking-tight text-white transition-colors group-hover:text-brand"
+												>
+													{result.aiTitle || result.title}
+												</h4>
+												{#if result.aiTitle}
+													<p class="text-[10px] font-bold text-zinc-500 uppercase italic">
+														Original: {result.title}
+													</p>
+												{/if}
+											</div>
 											<p
-												class="font-mono text-[9px] font-black tracking-widest text-zinc-700 uppercase"
+												class="mt-auto font-mono text-[9px] font-black tracking-widest text-zinc-700 uppercase"
 											>
 												1080P HEVC
 											</p>
@@ -952,10 +1055,11 @@
 															/^KNC\s+\d+[xX]\d+\s*\|\s*/i,
 															''
 														);
-														const fullTitle = `${result.title} | ${cleanEpisodeTitle}`;
+														const displayTitle = result.aiTitle || result.title;
+														const fullTitle = displayTitle;
 														navigator.clipboard.writeText(fullTitle);
 													}}
-													class="text-[9px] font-black tracking-widest text-zinc-500 uppercase transition-colors hover:text-white"
+													class="text-[9px] font-black tracking-widest text-zinc-500 uppercase transition-colors hover:text-brand"
 												>
 													Copy Title
 												</button>
@@ -964,16 +1068,37 @@
 													onclick={(e) => {
 														e.stopPropagation();
 														if (!metadata?.description) return;
-														const cleanedDesc = metadata.description
+
+														// Filter out timestamps and "temas:"
+														let lines = metadata.description
 															.split('\n')
 															.filter(
 																(line) =>
 																	!/\d{1,2}:\d{2}/.test(line) &&
 																	!line.toLowerCase().includes('temas:')
-															)
-															.join('\n')
+															);
+
+														// Find where the links/social section starts
+														// We look for common keywords or the first line with http
+														let splitIndex = lines.findIndex(
+															(line) =>
+																line.match(/https?:\/\//i) ||
+																line.match(/SÍGUENOS|SIGUENOS|REDES|INSTAGRAM|TWITTER|TIKTOK/i)
+														);
+
+														if (splitIndex === -1) splitIndex = lines.length;
+
+														const narrative = lines.slice(0, splitIndex).join('\n').trim();
+														const links = lines.slice(splitIndex).join('\n').trim();
+
+														const callToAction = `¡DISFRUTA DEL EPISODIO COMPLETO AQUÍ!:\n${youtubeUrl}`;
+
+														const finalDesc = [narrative, callToAction, links]
+															.filter(Boolean)
+															.join('\n\n')
 															.trim();
-														navigator.clipboard.writeText(cleanedDesc);
+
+														navigator.clipboard.writeText(finalDesc);
 													}}
 													class="text-[9px] font-black tracking-widest text-zinc-500 uppercase transition-colors hover:text-white"
 												>
@@ -1029,9 +1154,15 @@
 	{#if zoomedThumb}
 		<div
 			class="animate-in fade-in fixed inset-0 z-50 flex flex-col items-center justify-center bg-black/98 p-12 duration-300"
+			onclick={() => (zoomedThumb = null)}
+			tabindex="-1"
+			onkeydown={(e) => e.key === 'Escape' && (zoomedThumb = null)}
 		>
 			<button
-				onclick={() => (zoomedThumb = null)}
+				onclick={(e) => {
+					e.stopPropagation();
+					zoomedThumb = null;
+				}}
 				class="absolute top-10 right-10 text-[10px] font-black tracking-[0.3em] text-zinc-500 uppercase transition-colors hover:text-white"
 			>
 				Back to Studio [Esc]
@@ -1039,6 +1170,7 @@
 
 			<div
 				class="relative aspect-video w-full max-w-6xl overflow-hidden border border-zinc-800 shadow-[0_0_100px_rgba(0,0,0,1)]"
+				onclick={(e) => e.stopPropagation()}
 			>
 				<img
 					src={zoomedThumb!.masteredFilename
@@ -1048,30 +1180,8 @@
 							: `/api/proxy/thumbnail/${zoomedThumb!.clipId}-thumb-${zoomedThumb!.index}.jpg`}
 					alt="Preview"
 					class="h-full w-full object-contain"
+					class:scale-x-[-1]={zoomedThumb!.flipped && !zoomedThumb!.masteredFilename}
 				/>
-			</div>
-
-			<div class="mt-12 flex gap-8">
-				<button
-					onclick={() => {
-						const resIdx = trimResults?.findIndex(
-							(r: { clipId?: string }) => r.clipId === zoomedThumb?.clipId
-						);
-						if (resIdx !== undefined && resIdx !== -1) {
-							handleSelectThumbnail(zoomedThumb!.clipId, zoomedThumb!.index, resIdx);
-						}
-						zoomedThumb = null;
-					}}
-					class="bg-white px-12 py-5 text-[10px] font-black tracking-[0.5em] text-black uppercase transition-all hover:bg-brand hover:text-white"
-				>
-					COMMIT SELECTION
-				</button>
-				<button
-					onclick={() => (zoomedThumb = null)}
-					class="border border-zinc-800 px-12 py-5 text-[10px] font-black tracking-[0.5em] text-white uppercase transition-all hover:bg-zinc-900"
-				>
-					ABORT
-				</button>
 			</div>
 		</div>
 	{/if}
@@ -1083,6 +1193,7 @@
 				clipTitle={generatingThumb.clipTitle}
 				episodeTitle={generatingThumb.episodeTitle}
 				filename={generatingThumb.filename}
+				flipped={generatingThumb.flipped}
 				save={true}
 				onComplete={(success: boolean) => {
 					if (success && generatingThumb) {

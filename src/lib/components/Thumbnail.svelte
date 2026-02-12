@@ -2,7 +2,15 @@
 	import { domToPng } from 'modern-screenshot';
 	import { onMount } from 'svelte';
 
-	let { image, clipTitle, episodeTitle, save, filename, onComplete = () => {} } = $props();
+	let {
+		image,
+		clipTitle,
+		episodeTitle,
+		save,
+		filename,
+		flipped = false,
+		onComplete = () => {}
+	} = $props();
 
 	const open = $derived(episodeTitle.includes('[') ? '[' : '');
 	const close = $derived(episodeTitle.includes(']') ? ']' : '');
@@ -63,7 +71,10 @@
 		class="relative h-[720px] w-[1280px] overflow-clip bg-black"
 	>
 		<img
-			class="absolute inset-0 origin-[60%_50%] scale-140"
+			class="absolute inset-0 scale-140"
+			class:origin-[60%_50%]={!flipped}
+			class:origin-[45%_50%]={flipped}
+			class:rotate-y-180={flipped}
 			src={image}
 			alt="thumbnail"
 			onload={() => (isImageLoaded = true)}

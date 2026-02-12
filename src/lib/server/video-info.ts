@@ -98,12 +98,13 @@ function parseSubtitles(vttContent: string): string {
     const line = lines[i].trim();
 
     // Check for timestamp line (00:00:00.000 --> 00:00:00.000)
-    const timestampMatch = line.match(/^(\d{2}:\d{2}:\d{2}.\d{3}) -->/);
+    const timestampMatch = line.match(/^(\d{2}):(\d{2}):(\d{2}).(\d{3}) -->/);
     if (timestampMatch) {
-      // Extract minute:second for the index
-      const parts = timestampMatch[1].split('.')[0].split(':');
-      const ts = parts.length > 2 ? parts.slice(1).join(':') : parts.join(':'); // mm:ss
-      lastTimestamp = `[${ts}] `;
+      const hrs = parseInt(timestampMatch[1]);
+      const mins = parseInt(timestampMatch[2]);
+      const secs = parseInt(timestampMatch[3]);
+      const totalSeconds = hrs * 3600 + mins * 60 + secs;
+      lastTimestamp = `[${totalSeconds}] `;
       continue;
     }
 

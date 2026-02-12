@@ -21,22 +21,59 @@ export interface TrimOptions {
 
 import { generateClickbaitTitle } from './ai';
 
-function extractTranscriptionFragment(transcription: string, start: number, end: number): string {
-  // Simple fragment extractor based on [mm:ss] markers
-  const pattern = /\[(\d+):(\d+)\]/g;
-  const matches = [];
+export function extractTranscriptionFragment(transcription: string, start: number, end: number): string {
+  console.log(`[trimmer] Extracting fragment: Requested ${start}s - ${end}s`);
+
+  // Pattern 1: [S] (Absolute seconds) - New format
+  // Pattern 2: [HH:MM:SS] or [MM:SS] - Old format
+  const pattern = /\[(\d+(?::\d+)*)\]/g;
+  interface Marker {
+    time: number;
+    index: number;
+  }
+  const matches: Marker[] = [];
   let match;
 
   while ((match = pattern.exec(transcription)) !== null) {
-    const timeInSeconds = parseInt(match[1]) * 60 + parseInt(match[2]);
+    const timeStr = match[1];
+    let timeInSeconds = 0;
+
+    if (timeStr.includes(':')) {
+      const parts = timeStr.split(':').map(Number);
+      if (parts.length === 3) {
+        timeInSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+      } else if (parts.length === 2) {
+        timeInSeconds = parts[0] * 60 + parts[1];
+      }
+    } else {
+      timeInSeconds = parseInt(timeStr);
+    }
+
     matches.push({ time: timeInSeconds, index: match.index });
   }
 
-  // Find start and end indices in the text
-  const startIndex = matches.filter((m: any) => m.time <= start).pop()?.index || 0;
-  const endIndex = matches.filter((m: any) => m.time >= end).shift()?.index || transcription.length;
+  if (matches.length === 0) {
+    console.warn(`[trimmer] WARNING: No transcription markers found! First 200 chars: "${transcription.substring(0, 200)}"`);
+  }
 
-  return transcription.substring(startIndex, endIndex).trim();
+  // Add a small buffer (5s) for context at the start and end
+  const buffer = 5;
+  const bufferedStart = Math.max(0, start - buffer);
+  const bufferedEnd = end + buffer;
+
+  // Find start and end indices in the text
+  const startMatch = matches.filter((m) => m.time <= bufferedStart).pop();
+  const endMatch = matches.filter((m) => m.time >= bufferedEnd).shift();
+
+  const startIndex = startMatch?.index || 0;
+  const endIndex = endMatch?.index || transcription.length;
+
+  console.log(`[trimmer] Found ${matches.length} markers. Start @ ${startMatch?.time || 'N/A'}s (idx ${startIndex}), End @ ${endMatch?.time || 'N/A'}s (idx ${endIndex})`);
+
+  const fragment = transcription.substring(startIndex, endIndex).trim();
+  console.log(`[trimmer] Fragment extracted length: ${fragment.length} chars.`);
+
+  return fragment;
 }
 
 /**
